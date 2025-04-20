@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import random
 from datetime import datetime
 
@@ -40,14 +41,11 @@ async def handle_business_message(message: Message, bot: Bot):
     user_id = message.from_user.id
     key = (bc_id, user_id)
 
-    # запам'ятовуємо останній час
     now = datetime.utcnow()
     last_msg[key] = now
 
-    # кладемо повідомлення в буфер
     pending_messages.setdefault(key, []).append(message)
 
-    # якщо вже є задача очікування — скасовуємо і створюємо нову
     task = pending_tasks.get(key)
     if task and not task.done():
         task.cancel()
@@ -60,7 +58,11 @@ async def handle_business_message(message: Message, bot: Bot):
 
 
 async def process_debounced(bot: Bot, key: tuple[str, int]):
-    await asyncio.sleep(DEBOUNCE_SECONDS)
+    try:
+        await asyncio.sleep(DEBOUNCE_SECONDS)
+    except asyncio.CancelledError:
+        logging.debug(f"⚠️ Debounce скасовано для {key} — буде нова задача")
+        return
 
     bc_id, user_id = key
     messages = pending_messages.pop(key, [])
@@ -75,38 +77,37 @@ async def process_debounced(bot: Bot, key: tuple[str, int]):
     if not combined_text:
         return
 
-    # дістаємо промпт
     chat = await ChatRepository().chat(user_id, bc_id)
 
-    # імітація «бачу повідомлення»
-    await bot.read_business_message(
-        business_connection_id=bc_id,
-        chat_id=last_msg_obj.chat.id,
-        message_id=last_msg_obj.message_id,
-    )
-
-    # запит до DeepSeek
-    response = await deepseek.make_request(
-        chat_id=last_msg_obj.chat.id,
-        user_message=combined_text,
-        system_prompt=chat['prompt']
-    )
-
-    if not response:
-        return
-
-    # читаємо як «менеджер»
-    words = max(1, len(response.split()))
-    reading_time = words / WORDS_PER_SEC * random.uniform(*EXTRA_JITTER)
-    await asyncio.sleep(reading_time)
-
-    # випадкова відповідь як reply або просто message
-    if random.random() < 0.35:
-        await bot.send_message(
-            chat_id=last_msg_obj.chat.id,
-            text=response,
+    try:
+        await bot.read_business_message(
             business_connection_id=bc_id,
-            reply_to_message_id=last_msg_obj.message_id
+            chat_id=last_msg_obj.chat.id,
+            message_id=last_msg_obj.message_id,
         )
-    else:
-        await last_msg_obj.answer(response)
+
+        response = await deepseek.make_request(
+            chat_id=last_msg_obj.chat.id,
+            user_message=combined_text,
+            system_prompt=chat['prompt']
+        )
+
+        if not response:
+            return
+
+        words = max(1, len(response.split()))
+        reading_time = words / WORDS_PER_SEC * random.uniform(*EXTRA_JITTER)
+        await asyncio.sleep(reading_time)
+
+        if random.random() < 0.35:
+            await bot.send_message(
+                chat_id=last_msg_obj.chat.id,
+                text=response,
+                business_connection_id=bc_id,
+                reply_to_message_id=last_msg_obj.message_id
+            )
+        else:
+            await last_msg_obj.answer(response)
+
+    except Exception as e:
+        logging.error(f"[Debounced handler] Помилка для {key}: {e}")
