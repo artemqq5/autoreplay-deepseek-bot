@@ -28,6 +28,8 @@ class DeepSeekAPI:
 
             if not history:
                 history.append({"role": "system", "content": system_prompt})
+            else:
+                history[0]["content"] = system_prompt
 
             history.append({"role": "user", "content": user_message})
 
