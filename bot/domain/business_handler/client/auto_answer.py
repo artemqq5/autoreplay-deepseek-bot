@@ -44,17 +44,25 @@ async def handle_business_message(message: Message, bot: Bot):
     now = datetime.utcnow()
     last_msg[key] = now
 
+    # Ініціалізація черги пакетів
     if key not in pending_messages or not pending_messages[key]:
-        pending_messages[key] = [[]]  # гарантія наявності хоча б одного списку
-
+        pending_messages[key] = [[]]
     pending_messages[key][-1].append(message)
 
     task = pending_tasks.get(key)
 
-    if not task or task.done():
-        pending_tasks[key] = asyncio.create_task(process_debounced(bot, key))
+    # 🧠 Якщо вже є активна задача — читаємо повідомлення одразу (бот "в діалозі")
+    if task and not task.done():
+        await bot.read_business_message(
+            business_connection_id=bc_id,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+        )
+        logging.debug(f"👁 Прочитав одразу (в діалозі): {message.text}")
     else:
-        logging.debug(f"📨 Повідомлення записано в буфер до активного завдання — {key}")
+        # 🕐 Якщо немає активної задачі — запускаємо debounce
+        logging.debug(f"▶️ Запускаємо нову задачу на обробку")
+        pending_tasks[key] = asyncio.create_task(process_debounced(bot, key))
 
     return True
 
