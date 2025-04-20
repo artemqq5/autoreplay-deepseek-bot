@@ -44,11 +44,9 @@ async def handle_business_message(message: Message, bot: Bot):
     now = datetime.utcnow()
     last_msg[key] = now
 
-    # ініціалізація черги
-    if key not in pending_messages:
-        pending_messages[key] = [[]]  # перший пакет
+    if key not in pending_messages or not pending_messages[key]:
+        pending_messages[key] = [[]]  # гарантія наявності хоча б одного списку
 
-    # додаємо в останній (активний) пакет
     pending_messages[key][-1].append(message)
 
     task = pending_tasks.get(key)
