@@ -23,6 +23,8 @@ class DeepSeekAPI:
 
     async def make_request(self, chat_id: int, user_message: str, system_prompt: str = DEFAULT_DEEPSEEK_CONTENT):
         try:
+            if not self._dialogs[chat_id] or self._dialogs[chat_id][0]["content"] != system_prompt:
+                self._dialogs[chat_id] = [{"role": "system", "content": system_prompt}]
 
             history = self._dialogs[chat_id]
 
