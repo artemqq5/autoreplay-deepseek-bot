@@ -58,13 +58,18 @@ async def handle_business_message(message: Message, bot: Bot):
 
 
 async def process_debounced(bot: Bot, key: tuple[str, int]):
-    try:
-        await asyncio.sleep(DEBOUNCE_SECONDS)
-    except asyncio.CancelledError:
-        logging.debug(f"⚠️ Debounce скасовано для {key} — буде нова задача")
-        return
-
     bc_id, user_id = key
+
+    while True:
+        await asyncio.sleep(DEBOUNCE_SECONDS)
+        now = datetime.utcnow()
+        last_time = last_msg.get(key)
+
+        if last_time and (now - last_time).total_seconds() >= DEBOUNCE_SECONDS:
+            break  # тиша 5+ сек — можна відповідати
+        else:
+            logging.debug(f"⌛ Очікую ще: нове повідомлення від {key}")
+
     messages = pending_messages.pop(key, [])
     if not messages:
         return
@@ -85,7 +90,7 @@ async def process_debounced(bot: Bot, key: tuple[str, int]):
             chat_id=last_msg_obj.chat.id,
             message_id=last_msg_obj.message_id,
         )
-        
+
         logging.info(
             f"\n📥 Вхідне повідомлення зібране з {len(messages)} частин "
             f"(bc_id={bc_id}):\n---\n{combined_text}\n---"
