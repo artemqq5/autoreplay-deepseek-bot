@@ -85,7 +85,11 @@ async def process_debounced(bot: Bot, key: tuple[str, int]):
             chat_id=last_msg_obj.chat.id,
             message_id=last_msg_obj.message_id,
         )
-
+        
+        logging.info(
+            f"\n📥 Вхідне повідомлення зібране з {len(messages)} частин "
+            f"(bc_id={bc_id}):\n---\n{combined_text}\n---"
+        )
         response = await deepseek.make_request(
             chat_id=last_msg_obj.chat.id,
             user_message=combined_text,

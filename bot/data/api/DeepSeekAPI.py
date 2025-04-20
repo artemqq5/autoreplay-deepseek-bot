@@ -54,9 +54,7 @@ class DeepSeekAPI:
                 self._dialogs[chat_id] = [history[0]] + history[-MAX_TURNS * 2:]
 
             # лог
-            logging.info(
-                "Chat %s | Q: %s | A: %s", chat_id, user_message, assistant_reply
-            )
+            logging.info(f"🤖 DeepSeek:\nQ:\n{user_message}\n\nA:\n{assistant_reply}\n{'-'*30}")
             return assistant_reply
         except Exception as e:
             logging.error(e)
