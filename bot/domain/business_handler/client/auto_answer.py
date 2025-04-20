@@ -26,7 +26,7 @@ EXTRA_JITTER = (0.8, 1.2)
 last_msg: dict[tuple[str, int], datetime] = {}  # (bc_id, user_id) -> ts
 
 # зберігаємо: (bc_id, user_id) -> [повідомлення]
-pending_messages: dict[tuple[str, int], list[Message]] = {}
+pending_messages: dict[tuple[str, int], list[list[Message]]] = {}
 pending_tasks: dict[tuple[str, int], asyncio.Task] = {}
 DEBOUNCE_SECONDS = 5
 
@@ -44,17 +44,19 @@ async def handle_business_message(message: Message, bot: Bot):
     now = datetime.utcnow()
     last_msg[key] = now
 
-    pending_messages.setdefault(key, []).append(message)
+    # ініціалізація черги
+    if key not in pending_messages:
+        pending_messages[key] = [[]]  # перший пакет
+
+    # додаємо в останній (активний) пакет
+    pending_messages[key][-1].append(message)
 
     task = pending_tasks.get(key)
 
     if not task or task.done():
-        # ❗️ створюємо нову задачу тільки якщо попередня завершена
-        pending_tasks[key] = asyncio.create_task(
-            process_debounced(bot, key)
-        )
+        pending_tasks[key] = asyncio.create_task(process_debounced(bot, key))
     else:
-        logging.debug(f"📨 Нове повідомлення — але вже чекаємо, не скасовуємо для {key}")
+        logging.debug(f"📨 Повідомлення записано в буфер до активного завдання — {key}")
 
     return True
 
@@ -62,63 +64,63 @@ async def handle_business_message(message: Message, bot: Bot):
 async def process_debounced(bot: Bot, key: tuple[str, int]):
     bc_id, user_id = key
 
-    while True:
-        await asyncio.sleep(DEBOUNCE_SECONDS)
-        now = datetime.utcnow()
-        last_time = last_msg.get(key)
+    while pending_messages.get(key):  # поки є черги
+        # чекаємо тишу
+        while True:
+            await asyncio.sleep(DEBOUNCE_SECONDS)
+            now = datetime.utcnow()
+            last_time = last_msg.get(key)
+            if last_time and (now - last_time).total_seconds() >= DEBOUNCE_SECONDS:
+                break
 
-        if last_time and (now - last_time).total_seconds() >= DEBOUNCE_SECONDS:
-            break  # тиша 5+ сек — можна відповідати
-        else:
-            logging.debug(f"⌛ Очікую ще: нове повідомлення від {key}")
-
-    messages = pending_messages.pop(key, [])
-    if not messages:
-        return
-
-    last_msg_obj = messages[-1]
-    combined_text = "\n".join(
-        filter(None, (DeepSeekAPI._norm_text(m.text) for m in messages))
-    )
-
-    if not combined_text:
-        return
-
-    chat = await ChatRepository().chat(user_id, bc_id)
-
-    try:
-        await bot.read_business_message(
-            business_connection_id=bc_id,
-            chat_id=last_msg_obj.chat.id,
-            message_id=last_msg_obj.message_id,
-        )
-
-        logging.info(
-            f"\n📥 Вхідне повідомлення зібране з {len(messages)} частин "
-            f"(bc_id={bc_id}):\n---\n{combined_text}\n---"
-        )
-        response = await deepseek.make_request(
-            chat_id=last_msg_obj.chat.id,
-            user_message=combined_text,
-            system_prompt=chat['prompt']
-        )
-
-        if not response:
+        message_batches = pending_messages.get(key)
+        if not message_batches:
             return
 
-        words = max(1, len(response.split()))
-        reading_time = words / WORDS_PER_SEC * random.uniform(*EXTRA_JITTER)
-        await asyncio.sleep(reading_time)
+        messages = message_batches.pop(0)  # обробляємо найстаріший пакет
 
-        if random.random() < 0.35:
-            await bot.send_message(
-                chat_id=last_msg_obj.chat.id,
-                text=response,
+        last_msg_obj = messages[-1]
+        combined_text = "\n".join(
+            filter(None, (DeepSeekAPI._norm_text(m.text) for m in messages))
+        )
+        if not combined_text:
+            continue
+
+        logging.info(
+            f"\n📥 Новий пакет з {len(messages)} повідомлень від {key}:\n---\n{combined_text}\n---"
+        )
+
+        chat = await ChatRepository().chat(user_id, bc_id)
+
+        try:
+            await bot.read_business_message(
                 business_connection_id=bc_id,
-                reply_to_message_id=last_msg_obj.message_id
+                chat_id=last_msg_obj.chat.id,
+                message_id=last_msg_obj.message_id,
             )
-        else:
-            await last_msg_obj.answer(response)
 
-    except Exception as e:
-        logging.error(f"[Debounced handler] Помилка для {key}: {e}")
+            response = await deepseek.make_request(
+                chat_id=last_msg_obj.chat.id,
+                user_message=combined_text,
+                system_prompt=chat['prompt']
+            )
+
+            if not response:
+                continue
+
+            words = max(1, len(response.split()))
+            reading_time = words / WORDS_PER_SEC * random.uniform(*EXTRA_JITTER)
+            await asyncio.sleep(reading_time)
+
+            if random.random() < 0.35:
+                await bot.send_message(
+                    chat_id=last_msg_obj.chat.id,
+                    text=response,
+                    business_connection_id=bc_id,
+                    reply_to_message_id=last_msg_obj.message_id
+                )
+            else:
+                await last_msg_obj.answer(response)
+
+        except Exception as e:
+            logging.error(f"[Debounced handler] Помилка для {key}: {e}")
