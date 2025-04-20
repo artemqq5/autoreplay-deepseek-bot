@@ -118,15 +118,15 @@ async def process_debounced(bot: Bot, key: tuple[str, int]):
             reading_time = words / WORDS_PER_SEC * random.uniform(*EXTRA_JITTER)
             await asyncio.sleep(reading_time)
 
-            if random.random() < 0.35:
+            if len(messages) == 1:
+                await messages[0].answer(response)
+            else:
                 await bot.send_message(
                     chat_id=last_msg_obj.chat.id,
                     text=response,
                     business_connection_id=bc_id,
                     reply_to_message_id=last_msg_obj.message_id
                 )
-            else:
-                await last_msg_obj.answer(response)
 
         except Exception as e:
             logging.error(f"[Debounced handler] Помилка для {key}: {e}")
