@@ -47,12 +47,14 @@ async def handle_business_message(message: Message, bot: Bot):
     pending_messages.setdefault(key, []).append(message)
 
     task = pending_tasks.get(key)
-    if task and not task.done():
-        task.cancel()
 
-    pending_tasks[key] = asyncio.create_task(
-        process_debounced(bot, key)
-    )
+    if not task or task.done():
+        # ❗️ створюємо нову задачу тільки якщо попередня завершена
+        pending_tasks[key] = asyncio.create_task(
+            process_debounced(bot, key)
+        )
+    else:
+        logging.debug(f"📨 Нове повідомлення — але вже чекаємо, не скасовуємо для {key}")
 
     return True
 
