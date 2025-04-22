@@ -1,10 +1,15 @@
 import asyncio
 import logging
+import os
 import random
 from datetime import datetime
+from tempfile import NamedTemporaryFile
 
-from aiogram import Router, Bot
+import whisper
+from aiogram import Router, Bot, F
 from aiogram.types import Message
+from anyio import sleep
+from pydub import AudioSegment
 
 from bot.data.api.DeepSeekAPI import DeepSeekAPI
 from bot.data.repository.ChatRepository import ChatRepository
@@ -17,9 +22,11 @@ deepseek = DeepSeekAPI()
 router.business_message.middleware(ChatMessageMiddleware())
 router.business_message.middleware(ClientBusinessMiddleware())
 
+model = whisper.load_model("large")
+
 #  базовая «реакция» — задержка, если предыдущее сообщение было давно
 MIN_DELAY, MAX_DELAY = 5, 30  # сек
-WORDS_PER_SEC = 200 / 60  # ≈3слова/сек
+WORDS_PER_SEC = 200 / 100  # ≈3слова/сек
 EXTRA_JITTER = (0.8, 1.2)
 
 #  запоминаем время последнего сообщения клиента в этом bc‑чате
@@ -31,7 +38,7 @@ pending_tasks: dict[tuple[str, int], asyncio.Task] = {}
 DEBOUNCE_SECONDS = 5
 
 
-@router.business_message()
+@router.business_message(F.text)
 async def handle_business_message(message: Message, bot: Bot):
     user_text = DeepSeekAPI._norm_text(message.text)
     if not user_text:
@@ -58,7 +65,7 @@ async def handle_business_message(message: Message, bot: Bot):
             chat_id=message.chat.id,
             message_id=message.message_id,
         )
-        logging.debug(f"👁 Прочитав одразу (в діалозі): {message.text}")
+        # logging.debug(f"👁 Прочитав одразу (в діалозі): {message.text}")
     else:
         # 🕐 Якщо немає активної задачі — запускаємо debounce
         logging.debug(f"▶️ Запускаємо нову задачу на обробку")
@@ -92,9 +99,9 @@ async def process_debounced(bot: Bot, key: tuple[str, int]):
         if not combined_text:
             continue
 
-        logging.info(
-            f"\n📥 Новий пакет з {len(messages)} повідомлень від {key}:\n---\n{combined_text}\n---"
-        )
+        # logging.info(
+        #     f"\n📥 Новий пакет з {len(messages)} повідомлень від {key}:\n---\n{combined_text}\n---"
+        # )
 
         chat = await ChatRepository().chat(user_id, bc_id)
 
@@ -130,3 +137,65 @@ async def process_debounced(bot: Bot, key: tuple[str, int]):
 
         except Exception as e:
             logging.error(f"[Debounced handler] Помилка для {key}: {e}")
+
+
+@router.business_message(F.voice)
+async def handle_business_voice(message: Message, bot: Bot):
+    bc_id = message.business_connection_id
+    user_id = message.from_user.id
+    key = (bc_id, user_id)
+
+    await asyncio.sleep(3)
+    await bot.read_business_message(
+        business_connection_id=bc_id,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+    )
+
+    file_id = message.voice.file_id
+    file = await bot.get_file(file_id)
+
+    with NamedTemporaryFile(delete=False, suffix=".ogg") as ogg_temp:
+        await bot.download_file(file.file_path, destination=ogg_temp.name)
+        ogg_path = ogg_temp.name
+
+    wav_path = ogg_path.replace(".ogg", ".wav")
+
+    try:
+        # Конвертуємо ogg → wav
+        audio = AudioSegment.from_file(ogg_path)
+        audio.export(wav_path, format="wav")
+
+        # Транскрипція
+        result = model.transcribe(wav_path)
+        text = result.get("text", "").strip()
+        if not text:
+            return
+
+        # logging.info(f"🎤 Розпізнано voice: {text}")
+        chat = await ChatRepository().chat(user_id, bc_id)
+        response = await deepseek.make_request(
+            chat_id=message.chat.id,
+            user_message=text,
+            system_prompt=chat['prompt']
+        )
+
+        if not response:
+            return
+
+        await bot.send_message(
+            chat_id=message.chat.id,
+            text=response,
+            business_connection_id=bc_id,
+            reply_to_message_id=message.message_id
+        )
+
+    except Exception as e:
+        logging.error(f"[Voice Handler] {e}")
+
+    finally:
+        for path in [ogg_path, wav_path]:
+            try:
+                os.remove(path)
+            except Exception as e:
+                logging.warning(f"Не вдалося видалити файл {path}: {e}")
