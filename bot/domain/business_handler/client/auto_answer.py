@@ -22,7 +22,7 @@ deepseek = DeepSeekAPI()
 router.business_message.middleware(ChatMessageMiddleware())
 router.business_message.middleware(ClientBusinessMiddleware())
 
-model = whisper.load_model("turbo")
+model = whisper.load_model("small")
 
 #  базовая «реакция» — задержка, если предыдущее сообщение было давно
 MIN_DELAY, MAX_DELAY = 5, 30  # сек
