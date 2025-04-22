@@ -145,13 +145,6 @@ async def handle_business_voice(message: Message, bot: Bot):
     user_id = message.from_user.id
     key = (bc_id, user_id)
 
-    await asyncio.sleep(3)
-    await bot.read_business_message(
-        business_connection_id=bc_id,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-    )
-
     file_id = message.voice.file_id
     file = await bot.get_file(file_id)
 
@@ -171,6 +164,12 @@ async def handle_business_voice(message: Message, bot: Bot):
         text = result.get("text", "").strip()
         if not text:
             return
+
+        await bot.read_business_message(
+            business_connection_id=bc_id,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+        )
 
         # logging.info(f"🎤 Розпізнано voice: {text}")
         chat = await ChatRepository().chat(user_id, bc_id)
