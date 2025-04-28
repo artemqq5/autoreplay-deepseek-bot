@@ -18,6 +18,8 @@ async def chat_prompt_change(callback: CallbackQuery, state: FSMContext, i18n: I
 
 @router.message(ChangePromptState.Prompt)
 async def set_new_prompt(message: Message, state: FSMContext, i18n: I18nContext):
+    await state.set_state(None)
+
     prompt = message.text
     data = await state.get_data()
 
